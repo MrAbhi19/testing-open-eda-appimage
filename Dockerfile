@@ -28,13 +28,15 @@ RUN cmake -B build -G Ninja . \
         -DYOSYS_WITHOUT_SLANG=ON \
     && cmake --build build --parallel "$(nproc)" \
     && cmake --install build --prefix /out/usr --strip \
-    && echo "===== /out/usr =====" \
-    && ls -la /out/usr/ \
-    && echo "===== /out/usr/bin =====" \
-    && ls -la /out/usr/bin/ \
-    && echo "===== /out/usr/share =====" \
-    && ls -la /out/usr/share/ \
-    && echo "===== end install report ====="
+    && echo "===== /out tree (files only) =====" \
+    && find /out -type f | sort \
+    && echo "===== install_manifest.txt =====" \
+    && cat /src/build/install_manifest.txt 2>/dev/null | sort \
+    && echo "===== did the build produce a binary? =====" \
+    && ls -la /src/build/yosys 2>/dev/null || echo "(no /src/build/yosys)" \
+    && echo "===== /usr/bin in the BUILDER (leaked install?) =====" \
+    && ls -la /usr/bin/yosys 2>/dev/null || echo "(no /usr/bin/yosys)" \
+    && echo "===== end report ====="
 
 # ---------- Runtime stage ----------
 FROM ubuntu:22.04 AS runtime
