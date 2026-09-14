@@ -1,0 +1,124 @@
+name: Build GHDL AppImage
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        default: '4.1.0'
+        type: string
+      make_latest:
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: write
+
+env:
+  GHDL_VERSION: ${{ inputs.version }}
+  APPIMAGE_NAME: ghdl-${{ inputs.version }}-x86_64.AppImage
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnat gcc make git libzstd-dev zlib1g-dev \
+            wget curl file desktop-file-utils python3-pil
+
+      - name: Clone
+        run: |
+          git clone --depth 1 --branch v$GHDL_VERSION \
+            https://github.com/ghdl/ghdl.git src
+
+      - name: Build
+        run: |
+          cd src
+          ./configure --prefix=/usr
+          make -j$(nproc)
+
+      - name: Install
+        run: |
+          cd src
+          make install DESTDIR="$PWD/../AppDir"
+          ls -la ../AppDir/usr/bin/
+
+      - name: Desktop + icon
+        run: |
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          printf '[Desktop Entry]\nName=GHDL\nExec=ghdl\nIcon=ghdl\nType=Application\nCategories=Development;Electronics;\nTerminal=true\n' > AppDir/usr/share/applications/ghdl.desktop
+          python3 -c 'from PIL import Image; Image.new("RGBA",(256,256),(200,60,30,255)).save("AppDir/usr/share/icons/hicolor/256x256/apps/ghdl.png")'
+
+      - name: Download tools
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage appimagetool-x86_64.AppImage
+
+      - name: Bundle
+        run: |
+          REAL=AppDir/usr/bin/ghdl
+          [ -L "$REAL" ] && REAL=$(readlink -f "$REAL")
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            --executable "$REAL" \
+            --desktop-file AppDir/usr/share/applications/ghdl.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/ghdl.png
+
+      - name: Strip
+        run: |
+          find AppDir/usr/lib -name '*.so*' -exec strip --strip-unneeded {} + 2>/dev/null || true
+
+      - name: Package
+        run: |
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage --comp zstd \
+            --mksquashfs-opt -Xcompression-level --mksquashfs-opt 19 \
+            --mksquashfs-opt -b --mksquashfs-opt 1M \
+            AppDir "$APPIMAGE_NAME"
+          ls -lh *.AppImage
+
+      - name: Smoke test
+        run: |
+          chmod +x "$APPIMAGE_NAME"
+          ./"$APPIMAGE_NAME" --version
+          printf 'entity s is end entity;\narchitecture r of s is begin end architecture;\n' > s.vhd
+          ./"$APPIMAGE_NAME" -a --std=08 s.vhd
+
+      - name: SHA256
+        id: sha
+        run: |
+          H=$(sha256sum "$APPIMAGE_NAME" | awk '{print $1}')
+          echo "hash=$H" >> "$GITHUB_OUTPUT"
+          sha256sum "$APPIMAGE_NAME" > "$APPIMAGE_NAME.sha256"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APPIMAGE_NAME }}
+          path: |
+            ${{ env.APPIMAGE_NAME }}
+            ${{ env.APPIMAGE_NAME }}.sha256
+          if-no-files-found: error
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ghdl-v${{ env.GHDL_VERSION }}
+          name: GHDL ${{ env.GHDL_VERSION }}
+          overwrite_files: true
+          make_latest: ${{ inputs.make_latest }}
+          body: |
+            GHDL ${{ env.GHDL_VERSION }} AppImage (mcode backend)
+            SHA256: ${{ steps.sha.outputs.hash }}
+          files: |
+            ${{ env.APPIMAGE_NAME }}
+            ${{ env.APPIMAGE_NAME }}.sha256
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
