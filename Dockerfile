@@ -21,22 +21,16 @@ RUN wget -q https://github.com/YosysHQ/yosys/releases/download/v${YOSYS_VERSION}
     && tar xf yosys.tar.gz --strip-components=1 \
     && rm yosys.tar.gz
 
-RUN cmake -B build -G Ninja . \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr \
-        -DYOSYS_WITHOUT_EDITLINE=ON \
-        -DYOSYS_WITHOUT_SLANG=ON \
-    && cmake --build build --parallel "$(nproc)" \
-    && cmake --install build --prefix /out/usr --strip \
-    && echo "===== /out tree (files only) =====" \
-    && find /out -type f | sort \
-    && echo "===== install_manifest.txt =====" \
-    && cat /src/build/install_manifest.txt 2>/dev/null | sort \
-    && echo "===== did the build produce a binary? =====" \
-    && ls -la /src/build/yosys 2>/dev/null || echo "(no /src/build/yosys)" \
-    && echo "===== /usr/bin in the BUILDER (leaked install?) =====" \
-    && ls -la /usr/bin/yosys 2>/dev/null || echo "(no /usr/bin/yosys)" \
-    && echo "===== end report ====="
+# Use Yosys's Makefile — the CMake install rules in 0.69 don't install
+# the standalone yosys binary, only the googletest subproject.
+RUN make config-gcc \
+    && make -j"$(nproc)" \
+    && make install PREFIX=/out/usr \
+    && echo "===== /out/usr/bin =====" \
+    && ls -la /out/usr/bin/ \
+    && echo "===== /out/usr/share =====" \
+    && ls -la /out/usr/share/ \
+    && echo "===== end install report ====="
 
 # ---------- Runtime stage ----------
 FROM ubuntu:22.04 AS runtime
