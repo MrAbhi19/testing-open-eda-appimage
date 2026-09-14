@@ -22,11 +22,12 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   YOSYS_VERSION: ${{ inputs.version }}
   APPIMAGE_NAME: "yosys-${{ inputs.version }}-x86_64.AppImage"
-  IMAGE_NAME: "ghcr.io/mrabhi19/yosys"
+  IMAGE_NAME: "ghcr.io/mrabhi19/yosys-test"
 
 jobs:
   build:
@@ -143,7 +144,7 @@ jobs:
             ${{ env.APPIMAGE_NAME }}.sha256
           if-no-files-found: error
 
-            # ---------- Docker: build and publish ----------
+      # ---------- Docker: build and publish ----------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
