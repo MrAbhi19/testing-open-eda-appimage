@@ -27,7 +27,14 @@ RUN cmake -B build -G Ninja . \
         -DYOSYS_WITHOUT_EDITLINE=ON \
         -DYOSYS_WITHOUT_SLANG=ON \
     && cmake --build build --parallel "$(nproc)" \
-    && DESTDIR=/out cmake --install build --strip
+    && cmake --install build --prefix /out/usr --strip \
+    && echo "===== /out/usr =====" \
+    && ls -la /out/usr/ \
+    && echo "===== /out/usr/bin =====" \
+    && ls -la /out/usr/bin/ \
+    && echo "===== /out/usr/share =====" \
+    && ls -la /out/usr/share/ \
+    && echo "===== end install report ====="
 
 # ---------- Runtime stage ----------
 FROM ubuntu:22.04 AS runtime
