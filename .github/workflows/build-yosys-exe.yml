@@ -43,8 +43,8 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-libffi
-            mingw-w64-x86_64-bison
-            mingw-w64-x86_64-flex
+            bison
+            flex
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-fmt
 
