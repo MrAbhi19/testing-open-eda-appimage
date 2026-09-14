@@ -74,21 +74,25 @@ jobs:
       - name: Fix AppRun to set GHDL_PREFIX
         run: |
           set -e
+          echo "--- AppDir top level ---"
+          ls -la AppDir/ || true
+          echo "--- AppDir/usr/bin ---"
+          ls -la AppDir/usr/bin/ || true
           echo "--- AppDir/usr/lib/ghdl ---"
-          ls -la AppDir/usr/lib/ghdl/ || true
+          ls -la AppDir/usr/lib/ghdl/ 2>/dev/null || true
 
-          # Preserve linuxdeploy's AppRun (it sets LD_LIBRARY_PATH, PATH)
-          if [ -e AppDir/AppRun ] && [ ! -L AppDir/AppRun ]; then
-            mv AppDir/AppRun AppDir/AppRun.inner
-          fi
+          # Whatever AppRun is (symlink or file), delete it and write our own.
+          rm -f AppDir/AppRun
 
-          # Write our wrapper that sets GHDL_PREFIX then execs the original
-          printf '#!/bin/sh\n'                                                              > AppDir/AppRun
-          printf 'HERE="$(dirname "$(readlink -f "$0")")"\n'                               >> AppDir/AppRun
-          printf 'export GHDL_PREFIX="$HERE/usr/lib/ghdl"\n'                               >> AppDir/AppRun
-          printf 'exec "$HERE/AppRun.inner" "$@"\n'                                        >> AppDir/AppRun
+          printf '#!/bin/sh\n'                                                                               > AppDir/AppRun
+          printf 'HERE="$(dirname "$(readlink -f "$0")")"\n'                                                >> AppDir/AppRun
+          printf 'export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"\n' >> AppDir/AppRun
+          printf 'export PATH="$HERE/usr/bin:$PATH"\n'                                                      >> AppDir/AppRun
+          printf 'export GHDL_PREFIX="$HERE/usr/lib/ghdl"\n'                                                >> AppDir/AppRun
+          printf 'exec "$HERE/usr/bin/ghdl" "$@"\n'                                                         >> AppDir/AppRun
           chmod +x AppDir/AppRun
 
+          echo "--- new AppRun ---"
           cat AppDir/AppRun
 
       - name: Strip
