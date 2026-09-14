@@ -1,0 +1,165 @@
+# Unofficial Yosys Windows static .exe build
+# Copyright (c) 2026 Abhilash M — MIT License (see LICENSE)
+
+name: Build Yosys Windows EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Yosys Version (e.g. 0.69, 0.68)'
+        required: true
+        default: '0.69'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    # All steps run inside the MSYS2 MINGW64 environment unless a step
+    # overrides `shell:` (we do that for the pwsh hash step).
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 + MinGW-w64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            make
+            ninja
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-libffi
+            mingw-w64-x86_64-bison
+            mingw-w64-x86_64-flex
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-fmt
+
+      - name: Print toolchain versions (debug)
+        run: |
+          uname -a
+          x86_64-w64-mingw32-gcc --version | head -n1
+          x86_64-w64-mingw32-g++ --version | head -n1
+          cmake --version | head -n1
+          ninja --version
+          which cmake ninja x86_64-w64-mingw32-gcc
+
+      - name: Clone Yosys ${{ inputs.version }} with submodules
+        run: |
+          git clone --recursive --depth 1 \
+            --branch v${{ inputs.version }} \
+            https://github.com/YosysHQ/yosys.git src
+          cd src
+          git submodule status | head -n20
+          test -f CMakeLists.txt && echo "Source looks good"
+
+      - name: Configure (static, MinGW-w64, C++20)
+        run: |
+          cd src
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"
+
+      - name: Build
+        run: |
+          cd src
+          cmake --build build
+
+      - name: Collect yosys.exe (+ yosys-abc.exe if present)
+        run: |
+          cd src
+          echo "--- candidates ---"
+          find build -name '*.exe' -type f
+
+          YOSYS_EXE=$(find build -name 'yosys.exe' -type f | head -n1)
+          test -n "$YOSYS_EXE" || { echo "ERROR: yosys.exe not found"; exit 1; }
+
+          mkdir -p ../dist
+          cp "$YOSYS_EXE" ../dist/yosys.exe
+
+          # ABC is a separate helper binary in modern Yosys. Ship it too if built.
+          ABC_EXE=$(find build -name 'yosys-abc.exe' -type f | head -n1 || true)
+          if [ -n "$ABC_EXE" ]; then
+            cp "$ABC_EXE" ../dist/yosys-abc.exe
+            echo "Also shipping yosys-abc.exe"
+          else
+            echo "NOTE: yosys-abc.exe not built — the 'abc' command will not work"
+          fi
+
+          echo "--- dist ---"
+          ls -lh ../dist/
+
+      - name: Verify static linkage (no MinGW DLLs)
+        run: |
+          cd src
+          echo "--- ldd on yosys.exe ---"
+          ldd ../dist/yosys.exe
+          echo
+          echo "--- ldd on yosys-abc.exe (if present) ---"
+          [ -f ../dist/yosys-abc.exe ] && ldd ../dist/yosys-abc.exe || true
+          echo
+          echo "--- file ---"
+          file ../dist/yosys.exe
+          echo
+          # Fail the build if MinGW runtime DLLs are still required.
+          if ldd ../dist/yosys.exe | grep -qi 'mingw64\\bin'; then
+            echo "ERROR: yosys.exe still depends on MinGW DLLs — static link failed"
+            exit 1
+          fi
+          echo "OK: no MinGW DLL dependencies"
+
+      - name: Smoke test
+        run: |
+          ./dist/yosys.exe --version
+          ./dist/yosys.exe -p "help read_slang" >/dev/null \
+            && echo "read_slang available" \
+            || { echo "ERROR: read_slang MISSING"; exit 1; }
+
+      - name: Compute SHA256
+        id: sha
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\yosys.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
+          "hash=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          Write-Host "SHA256(yosys.exe): $hash"
+
+      - name: Write checksum file
+        shell: pwsh
+        run: |
+          Set-Location (Join-Path $env:GITHUB_WORKSPACE "dist")
+          $lines = @()
+          Get-ChildItem -Filter "*.exe" | ForEach-Object {
+            $h = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower()
+            $lines += "$h  $($_.Name)"
+          }
+          $lines | Out-File -FilePath "SHA256SUMS.txt" -Encoding ascii
+          Get-Content "SHA256SUMS.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yosys-${{ inputs.version }}-win64
+          path: |
+            dist/yosys.exe
+            dist/yosys-abc.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
