@@ -71,6 +71,26 @@ jobs:
             --desktop-file AppDir/usr/share/applications/ghdl.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/ghdl.png
 
+      - name: Fix AppRun to set GHDL_PREFIX
+        run: |
+          set -e
+          echo "--- AppDir/usr/lib/ghdl ---"
+          ls -la AppDir/usr/lib/ghdl/ || true
+
+          # Preserve linuxdeploy's AppRun (it sets LD_LIBRARY_PATH, PATH)
+          if [ -e AppDir/AppRun ] && [ ! -L AppDir/AppRun ]; then
+            mv AppDir/AppRun AppDir/AppRun.inner
+          fi
+
+          # Write our wrapper that sets GHDL_PREFIX then execs the original
+          printf '#!/bin/sh\n'                                                              > AppDir/AppRun
+          printf 'HERE="$(dirname "$(readlink -f "$0")")"\n'                               >> AppDir/AppRun
+          printf 'export GHDL_PREFIX="$HERE/usr/lib/ghdl"\n'                               >> AppDir/AppRun
+          printf 'exec "$HERE/AppRun.inner" "$@"\n'                                        >> AppDir/AppRun
+          chmod +x AppDir/AppRun
+
+          cat AppDir/AppRun
+
       - name: Strip
         run: |
           find AppDir/usr/lib -name '*.so*' -exec strip --strip-unneeded {} + 2>/dev/null || true
