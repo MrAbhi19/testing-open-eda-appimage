@@ -1,0 +1,191 @@
+# Unofficial OpenSTA AppImage build workflow
+# Copyright (c) 2026 Abhilash M — MIT License (see LICENSE)
+
+name: Build OpenSTA AppImage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  APPIMAGE_NAME: "opensta-x86_64.AppImage"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gawk git make cmake gcc g++ \
+            bison flex \
+            libffi-dev libfl-dev libreadline-dev \
+            tcl-dev zlib1g-dev \
+            swig \
+            wget curl file desktop-file-utils \
+            python3-pil
+
+      - name: Clone OpenSTA source
+        run: |
+          git clone --depth 1 https://github.com/The-OpenROAD-Project/OpenSTA.git opensta-src
+          cd opensta-src
+          COMMIT_HASH=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          echo "commit_hash=$COMMIT_HASH" >> "$GITHUB_ENV"
+          echo "commit_short=$COMMIT_SHORT" >> "$GITHUB_ENV"
+          echo "Building OpenSTA at commit: $COMMIT_HASH"
+
+      - name: Configure OpenSTA with CMake
+        run: |
+          cmake -B build opensta-src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr
+
+      - name: Build OpenSTA
+        run: |
+          cmake --build build --config Release --parallel $(nproc)
+
+      - name: Install OpenSTA into AppDir
+        run: |
+          cmake --install build --prefix AppDir/usr --strip
+          ls -la AppDir/usr/bin/
+
+      - name: Create .desktop file and 256x256 icon
+        run: |
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+
+          cat > AppDir/usr/share/applications/opensta.desktop << 'EOF'
+          [Desktop Entry]
+          Name=OpenSTA
+          Exec=sta
+          Icon=opensta
+          Type=Application
+          Categories=Development;Electronics;
+          Terminal=true
+          Comment=OpenSTA Static Timing Analyzer
+          EOF
+
+          python3 -c '
+          from PIL import Image
+          img = Image.new("RGBA", (256, 256), (200, 60, 30, 255))
+          img.save("AppDir/usr/share/icons/hicolor/256x256/apps/opensta.png", "PNG")
+          print("256x256 icon created successfully")
+          '
+
+      - name: Download linuxdeploy
+        run: |
+          wget -c "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+          chmod +x linuxdeploy-x86_64.AppImage
+
+      - name: Create the AppImage
+        run: |
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/sta \
+            --desktop-file AppDir/usr/share/applications/opensta.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/opensta.png \
+            --output appimage
+
+          if [ ! -f "${{ env.APPIMAGE_NAME }}" ]; then
+            for f in *.AppImage; do
+              case "$f" in
+                linuxdeploy-*.AppImage) continue ;;
+                *) mv "$f" "${{ env.APPIMAGE_NAME }}" ;;
+              esac
+            done
+          fi
+
+          ls -lh *.AppImage
+
+      - name: Smoke test the AppImage
+        run: |
+          chmod +x "${{ env.APPIMAGE_NAME }}"
+          ./"${{ env.APPIMAGE_NAME }}" -version
+
+      - name: Compute SHA256 of the AppImage
+        id: sha
+        run: |
+          HASH=$(sha256sum "${{ env.APPIMAGE_NAME }}" | awk '{print $1}')
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $HASH"
+
+      - name: Write checksum file
+        run: |
+          sha256sum "${{ env.APPIMAGE_NAME }}" > "${{ env.APPIMAGE_NAME }}.sha256"
+          cat "${{ env.APPIMAGE_NAME }}.sha256"
+
+      - name: Upload AppImage as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APPIMAGE_NAME }}
+          path: |
+            ${{ env.APPIMAGE_NAME }}
+            ${{ env.APPIMAGE_NAME }}.sha256
+          if-no-files-found: error
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: opensta-appimage
+          name: OpenSTA AppImage (Rolling)
+          overwrite_files: true
+          body: |
+            ## OpenSTA - Linux x86_64 AppImage
+
+            A standalone, portable AppImage of **OpenSTA** built from source at commit [`${{ env.commit_short }}`](https://github.com/The-OpenROAD-Project/OpenSTA/commit/${{ env.commit_hash }}).
+
+            ---
+
+            ### Build Info
+
+            - **Source Commit:** `${{ env.commit_hash }}`
+            - **Built:** ${{ github.event.repository.updated_at }}
+            - **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ---
+
+            ### Quick start
+
+            ```
+            chmod +x opensta-x86_64.AppImage
+            ./opensta-x86_64.AppImage -version
+            ```
+
+            ### Requirements
+
+            - Linux x86_64, glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, etc.)
+
+            ### Verify the download
+
+            SHA256: `${{ steps.sha.outputs.hash }}`
+
+            Or use the attached checksum file:
+
+            ```
+            sha256sum -c opensta-x86_64.AppImage.sha256
+            ```
+
+            ### Notes
+
+            Built automatically by GitHub Actions from the latest source. This release is updated on every workflow run with the latest commit. Full build logs in the **Actions** tab.
+
+            ---
+
+            *OpenSTA is developed by the OpenSTA team and contributors. This is an unofficial repackaging - upstream project: https://github.com/The-OpenROAD-Project/OpenSTA*
+          files: |
+            ${{ env.APPIMAGE_NAME }}
+            ${{ env.APPIMAGE_NAME }}.sha256
+          draft: false
+          prerelease: false
+          make_latest: false
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
