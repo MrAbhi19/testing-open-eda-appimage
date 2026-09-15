@@ -27,13 +27,22 @@ jobs:
             bison flex \
             libffi-dev libfl-dev libreadline-dev \
             tcl-dev zlib1g-dev \
+            libeigen3-dev \
             swig \
             wget curl file desktop-file-utils \
             python3-pil
 
+      - name: Build and install CUDD
+        run: |
+          git clone --depth 1 --branch 3.0.0 https://github.com/cuddorg/cudd.git
+          cd cudd
+          ./configure --prefix=/usr/local
+          make -j$(nproc)
+          sudo make install
+
       - name: Clone OpenSTA source
         run: |
-          git clone --depth 1 https://github.com/The-OpenROAD-Project/OpenSTA.git opensta-src
+          git clone --depth 1 https://github.com/parallaxsw/OpenSTA.git opensta-src
           cd opensta-src
           COMMIT_HASH=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
@@ -45,7 +54,8 @@ jobs:
         run: |
           cmake -B build opensta-src \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCUDD_DIR=/usr/local
 
       - name: Build OpenSTA
         run: |
@@ -139,7 +149,7 @@ jobs:
           body: |
             ## OpenSTA - Linux x86_64 AppImage
 
-            A standalone, portable AppImage of **OpenSTA** built from source at commit [`${{ env.commit_short }}`](https://github.com/The-OpenROAD-Project/OpenSTA/commit/${{ env.commit_hash }}).
+            A standalone, portable AppImage of **OpenSTA** built from source at commit [`${{ env.commit_short }}`](https://github.com/parallaxsw/OpenSTA/commit/${{ env.commit_hash }}).
 
             ---
 
@@ -178,7 +188,7 @@ jobs:
 
             ---
 
-            *OpenSTA is developed by the OpenSTA team and contributors. This is an unofficial repackaging - upstream project: https://github.com/The-OpenROAD-Project/OpenSTA*
+            *OpenSTA is developed by Parallax Software, Inc. and contributors. This is an unofficial repackaging - upstream project: https://github.com/parallaxsw/OpenSTA*
           files: |
             ${{ env.APPIMAGE_NAME }}
             ${{ env.APPIMAGE_NAME }}.sha256
