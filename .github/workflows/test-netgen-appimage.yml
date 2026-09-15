@@ -22,6 +22,9 @@ env:
   APPIMAGE_NAME: "netgen-${{ inputs.version }}-x86_64.AppImage"
   APPIMAGE_URL: "https://github.com/MrAbhi19/testing-open-eda-appimage/releases/download/netgen-v${{ inputs.version }}/netgen-${{ inputs.version }}-x86_64.AppImage"
   TEST_DIR: "netgen-test"
+  # --- These two prevent the tzdata / debconf interactive hang ---
+  DEBIAN_FRONTEND: noninteractive
+  TZ: Etc/UTC
 
 jobs:
   docker-test:
@@ -29,16 +32,29 @@ jobs:
     container:
       image: ubuntu:22.04
       options: --user root
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        TZ: Etc/UTC
 
     steps:
-      # ---------------------------------------------------------------
-      # 1. Checkout the repository (for test scripts, if any)
-      # ---------------------------------------------------------------
       - name: Checkout this repository
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------------
-      # 2. Install runtime dependencies inside the container
+      # Pre-seed timezone and disable debconf dialogs BEFORE any install
+      # ---------------------------------------------------------------
+      - name: Configure container for non-interactive apt
+        run: |
+          ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
+          echo "$TZ" > /etc/timezone
+          # Disable all debconf interactive frontends
+          echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+          # Block service start attempts (policy-rc.d) — silences invoke-rc.d warnings
+          printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+          chmod +x /usr/sbin/policy-rc.d
+
+      # ---------------------------------------------------------------
+      # Install runtime dependencies inside the container
       # ---------------------------------------------------------------
       - name: Install runtime dependencies
         run: |
@@ -49,9 +65,11 @@ jobs:
             tcl8.6 tk8.6 \
             python3 python3-pil \
             git ca-certificates
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
 
       # ---------------------------------------------------------------
-      # 3. Download the AppImage from the GitHub Release
+      # Download the AppImage from the GitHub Release
       # ---------------------------------------------------------------
       - name: Download Netgen AppImage
         run: |
