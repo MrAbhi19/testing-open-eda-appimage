@@ -20,6 +20,7 @@ permissions:
 env:
   NETGEN_VERSION: ${{ inputs.version }}
   APPIMAGE_NAME: "netgen-${{ inputs.version }}-x86_64.AppImage"
+  APPIMAGE_URL: "https://github.com/MrAbhi19/testing-open-eda-appimage/releases/download/netgen-v${{ inputs.version }}/netgen-${{ inputs.version }}-x86_64.AppImage"
   TEST_DIR: "netgen-test"
 
 jobs:
@@ -37,17 +38,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------------
-      # 2. Download the AppImage artifact produced by the build workflow
-      #    (or use the release asset if artifact is unavailable)
-      # ---------------------------------------------------------------
-      - name: Download AppImage artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.APPIMAGE_NAME }}
-          path: .
-
-      # ---------------------------------------------------------------
-      # 3. Install runtime dependencies inside the container
+      # 2. Install runtime dependencies inside the container
       # ---------------------------------------------------------------
       - name: Install runtime dependencies
         run: |
@@ -58,6 +49,15 @@ jobs:
             tcl8.6 tk8.6 \
             python3 python3-pil \
             git ca-certificates
+
+      # ---------------------------------------------------------------
+      # 3. Download the AppImage from the GitHub Release
+      # ---------------------------------------------------------------
+      - name: Download Netgen AppImage
+        run: |
+          wget -q -O "$APPIMAGE_NAME" "$APPIMAGE_URL"
+          ls -lh "$APPIMAGE_NAME"
+          file "$APPIMAGE_NAME"
 
       # ---------------------------------------------------------------
       # 4. Prepare test directory and fetch open-source test assets
