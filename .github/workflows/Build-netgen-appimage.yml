@@ -62,12 +62,12 @@ jobs:
       - name: Install Netgen into AppDir
         run: |
           cd netgen-${{ env.NETGEN_VERSION }}
-          # Use an absolute path for DESTDIR so the install target
-          # resolves correctly from any subdirectory.
           make install DESTDIR="$PWD/../AppDir"
-          ls -la ../AppDir/usr/bin/
+          # Verify both the wrapper script and the real ELF binary are present
+          ls -la ../AppDir/usr/bin/netgen
+          file ../AppDir/usr/lib/netgen/tcl/netgenexec
 
-      - name: Create .desktop file and 256x256 icon
+      - name: Create .desktop file, 256x256 icon, and custom AppRun
         run: |
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
@@ -90,6 +90,15 @@ jobs:
           print("256x256 icon created successfully")
           '
 
+          # Create a custom AppRun that sets NETGENDIR to the AppImage-internal path
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          # Set NETGENDIR to the location of netgenexec inside the AppImage
+          export NETGENDIR="$APPDIR/usr/lib/netgen"
+          exec "$APPDIR/usr/bin/netgen" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
       - name: Download linuxdeploy
         run: |
           wget -c "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
@@ -99,9 +108,10 @@ jobs:
         run: |
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
-            --executable AppDir/usr/bin/netgen \
+            --executable AppDir/usr/lib/netgen/tcl/netgenexec \
             --desktop-file AppDir/usr/share/applications/netgen.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/netgen.png \
+            --custom-apprun AppDir/AppRun \
             --output appimage
 
           if [ ! -f "${{ env.APPIMAGE_NAME }}" ]; then
