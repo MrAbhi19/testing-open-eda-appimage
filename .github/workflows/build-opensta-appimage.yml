@@ -36,12 +36,20 @@ jobs:
 
       - name: Build and install CUDD
         run: |
-          wget -q https://github.com/cuddorg/cudd/releases/download/v3.0.0/cudd-3.0.0.tar.gz
-          tar xf cudd-3.0.0.tar.gz
-          cd cudd-3.0.0
-          ./configure --prefix=/usr/local
-          make -j$(nproc)
+          set -euo pipefail
+          git clone --depth 1 --branch v3.0.0 \
+            https://github.com/cuddorg/cudd.git cudd-src
+          cd cudd-src
+          autoreconf -i
+          ./configure --prefix=/usr/local \
+                      --enable-shared \
+                      --enable-static
+          make -j"$(nproc)"
           sudo make install
+          sudo ldconfig
+          # Sanity check: fail fast if anything is missing
+          test -f /usr/local/include/cudd.h
+          ls -l /usr/local/lib/libcudd*
 
       - name: Clone OpenSTA source
         run: |
