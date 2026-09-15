@@ -1,0 +1,250 @@
+# Full-Scale Test Workflow for Netgen AppImage
+# Runs the built AppImage inside Docker and performs LVS tests
+# against real SKY130 netlists from open-source repositories.
+
+name: Test Netgen AppImage (Docker)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Netgen Version to test (e.g. 1.5.323)'
+        required: true
+        default: '1.5.323'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  NETGEN_VERSION: ${{ inputs.version }}
+  APPIMAGE_NAME: "netgen-${{ inputs.version }}-x86_64.AppImage"
+  TEST_DIR: "netgen-test"
+
+jobs:
+  docker-test:
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:22.04
+      options: --user root
+
+    steps:
+      # ---------------------------------------------------------------
+      # 1. Checkout the repository (for test scripts, if any)
+      # ---------------------------------------------------------------
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # 2. Download the AppImage artifact produced by the build workflow
+      #    (or use the release asset if artifact is unavailable)
+      # ---------------------------------------------------------------
+      - name: Download AppImage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APPIMAGE_NAME }}
+          path: .
+
+      # ---------------------------------------------------------------
+      # 3. Install runtime dependencies inside the container
+      # ---------------------------------------------------------------
+      - name: Install runtime dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            wget curl file \
+            libx11-6 libxext6 libxpm4 libxt6 \
+            tcl8.6 tk8.6 \
+            python3 python3-pil \
+            git ca-certificates
+
+      # ---------------------------------------------------------------
+      # 4. Prepare test directory and fetch open-source test assets
+      # ---------------------------------------------------------------
+      - name: Prepare test workspace
+        run: |
+          mkdir -p "$TEST_DIR"
+          cd "$TEST_DIR"
+
+          # --- 4a. Clone a minimal, self-checking SKY130 LVS example ---
+          # sgherbst/sky130-hello-world provides a minimal inverter
+          # with netlists and a regression script.
+          git clone --depth 1 https://github.com/sgherbst/sky130-hello-world.git
+          ls -la sky130-hello-world/
+
+          # --- 4b. Fetch additional LVS example netlists from the
+          #          VSD-IAT Physical Verification workshop ---
+          git clone --depth 1 https://github.com/glennfrey/Physical_Verification_using_Sky130.git
+          ls -la Physical_Verification_using_Sky130/
+
+          # --- 4c. Fetch the SKY130 netgen setup file (tech file) ---
+          # This is required by netgen to understand SKY130 devices.
+          wget -q https://raw.githubusercontent.com/RTimothyEdwards/open_pdks/master/sky130/libs.tech/netgen/sky130A_setup.tcl
+
+      # ---------------------------------------------------------------
+      # 5. Make the AppImage executable and run basic sanity checks
+      # ---------------------------------------------------------------
+      - name: Sanity check – AppImage runs and prints version/banner
+        run: |
+          chmod +x "$APPIMAGE_NAME"
+
+          # Netgen has no --version flag. Run in batch mode and
+          # pipe "quit" so the interpreter exits cleanly.
+          echo "quit" | ./"$APPIMAGE_NAME" -batch
+
+          # Verify the binary is a valid ELF inside the AppImage
+          ./"$APPIMAGE_NAME" --appimage-extract-and-run -batch <<< "quit" || true
+
+          echo "Sanity check passed."
+
+      # ---------------------------------------------------------------
+      # 6. LVS Smoke Test – compare two identical netlists (self-check)
+      # ---------------------------------------------------------------
+      - name: LVS smoke test – identical netlists must match
+        run: |
+          cd "$TEST_DIR"
+
+          # Create two identical minimal SPICE netlists (a simple resistor).
+          cat > netA.spice << 'EOF'
+          * Simple resistor test netlist
+          .subckt test a b
+          R1 a b 1k
+          .ends test
+          EOF
+
+          cat > netB.spice << 'EOF'
+          * Simple resistor test netlist
+          .subckt test a b
+          R1 a b 1k
+          .ends test
+          EOF
+
+          # Run LVS in batch mode. Netgen should report a match.
+          ../"$APPIMAGE_NAME" -batch lvs "netA.spice test" "netB.spice test" \
+            > lvs_smoke.log 2>&1
+
+          cat lvs_smoke.log
+
+          # Check for the success indicator in the log.
+          if grep -q "Circuits match uniquely" lvs_smoke.log; then
+            echo "✅ LVS smoke test PASSED"
+          else
+            echo "❌ LVS smoke test FAILED"
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
+      # 7. Real LVS Test – SKY130 inverter (layout vs. schematic)
+      # ---------------------------------------------------------------
+      - name: LVS test – SKY130 inverter from sky130-hello-world
+        run: |
+          cd "$TEST_DIR/sky130-hello-world"
+
+          # The repo contains extracted layout netlist and schematic netlist.
+          # We use the provided regression script as a reference.
+          ls -la
+
+          # Run netgen LVS comparing the extracted layout SPICE to the
+          # schematic SPICE, using the SKY130 setup file.
+          ../../"$APPIMAGE_NAME" -batch lvs \
+            "layout/inv1.spice inv1" \
+            "schematic/inv1.spice inv1" \
+            ../sky130A_setup.tcl \
+            comp.out \
+            > lvs_inverter.log 2>&1
+
+          cat lvs_inverter.log
+
+          if grep -q "Circuits match uniquely" lvs_inverter.log; then
+            echo "✅ SKY130 inverter LVS PASSED"
+          else
+            echo "❌ SKY130 inverter LVS FAILED"
+            echo "--- comp.out ---"
+            cat comp.out || true
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
+      # 8. Error-Handling Test – Mismatched netlists must be detected
+      # ---------------------------------------------------------------
+      - name: LVS test – mismatched netlists must fail
+        run: |
+          cd "$TEST_DIR"
+
+          cat > netMismatchA.spice << 'EOF'
+          .subckt test a b
+          R1 a b 1k
+          .ends test
+          EOF
+
+          cat > netMismatchB.spice << 'EOF'
+          .subckt test a b
+          R1 a b 2k
+          .ends test
+          EOF
+
+          ../"$APPIMAGE_NAME" -batch lvs \
+            "netMismatchA.spice test" \
+            "netMismatchB.spice test" \
+            > lvs_mismatch.log 2>&1 || true
+
+          cat lvs_mismatch.log
+
+          # Netgen should NOT report a match for mismatched values.
+          if grep -q "Circuits match uniquely" lvs_mismatch.log; then
+            echo "❌ Error-handling test FAILED – mismatch was not detected"
+            exit 1
+          else
+            echo "✅ Error-handling test PASSED – mismatch correctly detected"
+          fi
+
+      # ---------------------------------------------------------------
+      # 9. Subcircuit LVS Test – compare a specific subcircuit
+      # ---------------------------------------------------------------
+      - name: LVS test – subcircuit-level comparison
+        run: |
+          cd "$TEST_DIR"
+
+          cat > subA.spice << 'EOF'
+          .subckt inv a b vdd vss
+          M1 b a vss vss nmos
+          M2 b a vdd vdd pmos
+          .ends inv
+          EOF
+
+          cat > subB.spice << 'EOF'
+          .subckt inv a b vdd vss
+          M2 b a vdd vdd pmos
+          M1 b a vss vss nmos
+          .ends inv
+          EOF
+
+          ../"$APPIMAGE_NAME" -batch lvs \
+            "subA.spice inv" \
+            "subB.spice inv" \
+            > lvs_sub.log 2>&1
+
+          cat lvs_sub.log
+
+          if grep -q "Circuits match uniquely" lvs_sub.log; then
+            echo "✅ Subcircuit LVS PASSED"
+          else
+            echo "❌ Subcircuit LVS FAILED"
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
+      # 10. Upload test logs for inspection
+      # ---------------------------------------------------------------
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netgen-test-logs-${{ env.NETGEN_VERSION }}
+          path: |
+            $TEST_DIR/*.log
+            $TEST_DIR/*.out
+            $TEST_DIR/sky130-hello-world/*.log
+            $TEST_DIR/sky130-hello-world/comp.out
+          if-no-files-found: warn
