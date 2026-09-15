@@ -1,6 +1,6 @@
 # Full-Scale Test Workflow for Netgen AppImage
-# Runs the built AppImage inside Docker and performs LVS tests
-# against real SKY130 netlists from open-source repositories.
+# Runs the released AppImage inside a clean Ubuntu container and performs
+# a full LVS test suite against real SKY130 netlists from open source.
 
 name: Test Netgen AppImage (Docker)
 
@@ -22,9 +22,12 @@ env:
   APPIMAGE_NAME: "netgen-${{ inputs.version }}-x86_64.AppImage"
   APPIMAGE_URL: "https://github.com/MrAbhi19/testing-open-eda-appimage/releases/download/netgen-v${{ inputs.version }}/netgen-${{ inputs.version }}-x86_64.AppImage"
   TEST_DIR: "netgen-test"
-  # --- These two prevent the tzdata / debconf interactive hang ---
+  # Non-interactive apt + fixed timezone (prevents tzdata prompt)
   DEBIAN_FRONTEND: noninteractive
   TZ: Etc/UTC
+  # AppImages need FUSE; containers usually don't have it.
+  # This env var tells the runtime to self-extract and run instead.
+  APPIMAGE_EXTRACT_AND_RUN: "1"
 
 jobs:
   docker-test:
@@ -35,85 +38,90 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
         TZ: Etc/UTC
+        APPIMAGE_EXTRACT_AND_RUN: "1"
+
+    # ---- THE KEY FIX: force bash inside the container ----
+    # GitHub Actions defaults to `sh -e` inside containers, and dash
+    # does not support `set -o pipefail`.
+    defaults:
+      run:
+        shell: bash
 
     steps:
+      # ---------------------------------------------------------------
+      # 1. Checkout repo (for any local test scripts you may add later)
+      # ---------------------------------------------------------------
       - name: Checkout this repository
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------------
-      # Pre-seed timezone and disable debconf dialogs BEFORE any install
+      # 2. Pre-seed timezone + disable debconf dialogs
       # ---------------------------------------------------------------
       - name: Configure container for non-interactive apt
         run: |
-          ln -snf /usr/share/zoneinfo/$TZ /etc/localtime
+          ln -snf /usr/share/zoneinfo/"$TZ" /etc/localtime
           echo "$TZ" > /etc/timezone
-          # Disable all debconf interactive frontends
           echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
-          # Block service start attempts (policy-rc.d) — silences invoke-rc.d warnings
           printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
           chmod +x /usr/sbin/policy-rc.d
 
       # ---------------------------------------------------------------
-      # Install runtime dependencies inside the container
+      # 3. Runtime dependencies
       # ---------------------------------------------------------------
       - name: Install runtime dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            wget curl file \
+            wget curl file ca-certificates git \
             libx11-6 libxext6 libxpm4 libxt6 \
             tcl8.6 tk8.6 \
-            python3 python3-pil \
-            git ca-certificates
+            python3 python3-pil
           apt-get clean
           rm -rf /var/lib/apt/lists/*
 
       # ---------------------------------------------------------------
-      # Download the AppImage from the GitHub Release
+      # 4. Download the AppImage from the GitHub Release
       # ---------------------------------------------------------------
       - name: Download Netgen AppImage
         run: |
           wget -q -O "$APPIMAGE_NAME" "$APPIMAGE_URL"
           ls -lh "$APPIMAGE_NAME"
           file "$APPIMAGE_NAME"
+          chmod +x "$APPIMAGE_NAME"
 
       # ---------------------------------------------------------------
-      # 4. Prepare test directory and fetch open-source test assets
+      # 5. Prepare test workspace and fetch open-source assets
       # ---------------------------------------------------------------
       - name: Prepare test workspace
         run: |
-          set -uo pipefail        # note: NOT -e, so a missing file won't kill us
+          set -uo pipefail
           mkdir -p "$TEST_DIR"
           cd "$TEST_DIR"
 
-          # --- 4a. Minimal SKY130 LVS example (has its own regress.sh) ---
+          echo "::group::Clone sky130-hello-world"
           git clone --depth 1 https://github.com/sgherbst/sky130-hello-world.git
-          echo "--- sky130-hello-world contents ---"
           ls -la sky130-hello-world/
+          echo "::endgroup::"
 
-          # --- 4b. VSD-IAT workshop netlists ---
+          echo "::group::Clone VSD Physical Verification workshop"
           git clone --depth 1 https://github.com/glennfrey/Physical_Verification_using_Sky130.git
-          echo "--- Physical_Verification_using_Sky130 contents ---"
           ls -la Physical_Verification_using_Sky130/
+          echo "::endgroup::"
 
-          # --- 4c. Locate sky130A_setup.tcl ---
-          # Strategy: search the repos we just cloned first, then fall back
-          # to a list of known-good URLs (branch names changed over time).
+          # ---- Locate sky130A_setup.tcl (local first, then URLs) ----
           SETUP_FILE="sky130A_setup.tcl"
           FOUND=0
 
-          # 4c-i. Look inside the cloned repos
-          for candidate in \
-              $(find sky130-hello-world -name 'sky130A_setup.tcl' 2>/dev/null) \
-              $(find Physical_Verification_using_Sky130 -name 'sky130A_setup.tcl' 2>/dev/null) \
-              ; do
+          # Search locally inside the cloned repos
+          while IFS= read -r candidate; do
             cp "$candidate" "$SETUP_FILE"
-            echo "✅ Using local copy from: $candidate"
+            echo "✅ Using local copy: $candidate"
             FOUND=1
             break
-          done
+          done < <(find sky130-hello-world Physical_Verification_using_Sky130 \
+                        -name 'sky130A_setup.tcl' 2>/dev/null)
 
-          # 4c-ii. Fallback to known raw URLs (tries main, master, mirrors)
+          # Fallback to known-good raw URLs
           if [ "$FOUND" -eq 0 ]; then
             for URL in \
               "https://raw.githubusercontent.com/RTimothyEdwards/open_pdks/main/sky130/libs.tech/netgen/sky130A_setup.tcl" \
@@ -121,54 +129,43 @@ jobs:
               "https://raw.githubusercontent.com/efabless/open_pdks/main/sky130/libs.tech/netgen/sky130A_setup.tcl" \
               ; do
               echo "Trying: $URL"
-              if wget -q -L --tries=2 --timeout=20 -O "$SETUP_FILE" "$URL"; then
-                # Sanity-check: real Tcl setup files contain "proc" or "set"
-                if grep -qE '^\s*(proc|set)\b' "$SETUP_FILE"; then
-                  echo "✅ Fetched sky130A_setup.tcl from: $URL"
-                  FOUND=1
-                  break
-                else
-                  echo "⚠️  Downloaded file doesn't look like a Tcl setup file"
-                fi
+              if wget -q -L --tries=2 --timeout=20 -O "$SETUP_FILE" "$URL" \
+                 && grep -qE '^\s*(proc|set)\b' "$SETUP_FILE"; then
+                echo "✅ Fetched from: $URL"
+                FOUND=1
+                break
               fi
               rm -f "$SETUP_FILE"
             done
           fi
 
-          # 4c-iii. If we still don't have it, flag it and move on
           if [ "$FOUND" -eq 0 ]; then
-            echo "⚠️  WARNING: sky130A_setup.tcl not found anywhere."
-            echo "    The SKY130 inverter LVS test will be skipped."
+            echo "⚠️  sky130A_setup.tcl not found — SKY130 test will be skipped."
             touch SKY130_SETUP_MISSING
           fi
 
-          echo "--- test workspace ---"
+          echo "::group::Test workspace contents"
           ls -la
+          echo "::endgroup::"
 
       # ---------------------------------------------------------------
-      # 5. Make the AppImage executable and run basic sanity checks
+      # 6. Sanity check — AppImage launches in batch mode
       # ---------------------------------------------------------------
-      - name: Sanity check – AppImage runs and prints version/banner
+      - name: Sanity check — AppImage runs
         run: |
-          chmod +x "$APPIMAGE_NAME"
-
-          # Netgen has no --version flag. Run in batch mode and
-          # pipe "quit" so the interpreter exits cleanly.
+          set -euo pipefail
+          # -batch avoids needing a $DISPLAY. "quit" ends the interpreter.
           echo "quit" | ./"$APPIMAGE_NAME" -batch
-
-          # Verify the binary is a valid ELF inside the AppImage
-          ./"$APPIMAGE_NAME" --appimage-extract-and-run -batch <<< "quit" || true
-
-          echo "Sanity check passed."
+          echo "✅ Sanity check passed."
 
       # ---------------------------------------------------------------
-      # 6. LVS Smoke Test – compare two identical netlists (self-check)
+      # 7. LVS smoke test — identical netlists must match
       # ---------------------------------------------------------------
-      - name: LVS smoke test – identical netlists must match
+      - name: LVS smoke test — identical netlists
         run: |
+          set -euo pipefail
           cd "$TEST_DIR"
 
-          # Create two identical minimal SPICE netlists (a simple resistor).
           cat > netA.spice << 'EOF'
           * Simple resistor test netlist
           .subckt test a b
@@ -183,39 +180,43 @@ jobs:
           .ends test
           EOF
 
-          # Run LVS in batch mode. Netgen should report a match.
           ../"$APPIMAGE_NAME" -batch lvs "netA.spice test" "netB.spice test" \
             > lvs_smoke.log 2>&1
 
           cat lvs_smoke.log
 
-          # Check for the success indicator in the log.
-          if grep -q "Circuits match uniquely" lvs_smoke.log; then
-            echo "✅ LVS smoke test PASSED"
-          else
-            echo "❌ LVS smoke test FAILED"
-            exit 1
+          grep -q "Circuits match uniquely" lvs_smoke.log \
+            && echo "✅ LVS smoke test PASSED" \
+            || { echo "❌ LVS smoke test FAILED"; exit 1; }
+
+      # ---------------------------------------------------------------
+      # 8. Real LVS — SKY130 inverter (layout vs. schematic)
+      # ---------------------------------------------------------------
+      - name: LVS test — SKY130 inverter
+        run: |
+          set -euo pipefail
+          cd "$TEST_DIR"
+
+          if [ -f SKY130_SETUP_MISSING ]; then
+            echo "⚠️  Skipping — sky130A_setup.tcl not available."
+            exit 0
           fi
 
-      # ---------------------------------------------------------------
-      # 7. Real LVS Test – SKY130 inverter (layout vs. schematic)
-      # ---------------------------------------------------------------
-      - name: LVS test – SKY130 inverter from sky130-hello-world
-        run: |
-          cd "$TEST_DIR/sky130-hello-world"
+          cd sky130-hello-world
 
-          # The repo contains extracted layout netlist and schematic netlist.
-          # We use the provided regression script as a reference.
+          # Files in sgherbst/sky130-hello-world (flat layout):
+          #   inv1.spice   -> extracted layout netlist
+          #   post.spice   -> schematic-side netlist
+          #   regress.sh   -> reference LVS invocation
+          echo "--- available files ---"
           ls -la
 
-          # Run netgen LVS comparing the extracted layout SPICE to the
-          # schematic SPICE, using the SKY130 setup file.
           ../../"$APPIMAGE_NAME" -batch lvs \
-            "layout/inv1.spice inv1" \
-            "schematic/inv1.spice inv1" \
+            "inv1.spice inv1" \
+            "post.spice inv1" \
             ../sky130A_setup.tcl \
             comp.out \
-            > lvs_inverter.log 2>&1
+            > lvs_inverter.log 2>&1 || true
 
           cat lvs_inverter.log
 
@@ -229,10 +230,11 @@ jobs:
           fi
 
       # ---------------------------------------------------------------
-      # 8. Error-Handling Test – Mismatched netlists must be detected
+      # 9. Error handling — mismatched netlists must be detected
       # ---------------------------------------------------------------
-      - name: LVS test – mismatched netlists must fail
+      - name: LVS test — mismatched netlists must fail
         run: |
+          set -euo pipefail
           cd "$TEST_DIR"
 
           cat > netMismatchA.spice << 'EOF'
@@ -254,19 +256,19 @@ jobs:
 
           cat lvs_mismatch.log
 
-          # Netgen should NOT report a match for mismatched values.
           if grep -q "Circuits match uniquely" lvs_mismatch.log; then
-            echo "❌ Error-handling test FAILED – mismatch was not detected"
+            echo "❌ Error-handling FAILED — mismatch was not detected"
             exit 1
           else
-            echo "✅ Error-handling test PASSED – mismatch correctly detected"
+            echo "✅ Error-handling PASSED — mismatch correctly detected"
           fi
 
       # ---------------------------------------------------------------
-      # 9. Subcircuit LVS Test – compare a specific subcircuit
+      # 10. Subcircuit-level LVS
       # ---------------------------------------------------------------
-      - name: LVS test – subcircuit-level comparison
+      - name: LVS test — subcircuit comparison
         run: |
+          set -euo pipefail
           cd "$TEST_DIR"
 
           cat > subA.spice << 'EOF'
@@ -290,15 +292,12 @@ jobs:
 
           cat lvs_sub.log
 
-          if grep -q "Circuits match uniquely" lvs_sub.log; then
-            echo "✅ Subcircuit LVS PASSED"
-          else
-            echo "❌ Subcircuit LVS FAILED"
-            exit 1
-          fi
+          grep -q "Circuits match uniquely" lvs_sub.log \
+            && echo "✅ Subcircuit LVS PASSED" \
+            || { echo "❌ Subcircuit LVS FAILED"; exit 1; }
 
       # ---------------------------------------------------------------
-      # 10. Upload test logs for inspection
+      # 11. Upload all logs for inspection
       # ---------------------------------------------------------------
       - name: Upload test logs
         if: always()
@@ -306,8 +305,6 @@ jobs:
         with:
           name: netgen-test-logs-${{ env.NETGEN_VERSION }}
           path: |
-            $TEST_DIR/*.log
-            $TEST_DIR/*.out
-            $TEST_DIR/sky130-hello-world/*.log
-            $TEST_DIR/sky130-hello-world/comp.out
+            $TEST_DIR/**/*.log
+            $TEST_DIR/**/*.out
           if-no-files-found: warn
