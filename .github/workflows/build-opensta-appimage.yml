@@ -31,7 +31,8 @@ jobs:
             autoconf automake libtool \
             swig \
             wget curl file desktop-file-utils \
-            python3-pil
+            python3-pil \
+            libfuse2
 
       - name: Build and install CUDD
         run: |
@@ -72,7 +73,6 @@ jobs:
         run: |
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-
           cat > AppDir/usr/share/applications/opensta.desktop << 'EOF'
           [Desktop Entry]
           Name=OpenSTA
@@ -83,7 +83,6 @@ jobs:
           Terminal=true
           Comment=OpenSTA Static Timing Analyzer
           EOF
-
           python3 -c '
           from PIL import Image
           img = Image.new("RGBA", (256, 256), (200, 60, 30, 255))
@@ -104,7 +103,6 @@ jobs:
             --desktop-file AppDir/usr/share/applications/opensta.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/opensta.png \
             --output appimage
-
           if [ ! -f "${{ env.APPIMAGE_NAME }}" ]; then
             for f in *.AppImage; do
               case "$f" in
@@ -113,13 +111,16 @@ jobs:
               esac
             done
           fi
-
           ls -lh *.AppImage
 
       - name: Smoke test the AppImage
         run: |
           chmod +x "${{ env.APPIMAGE_NAME }}"
           ./"${{ env.APPIMAGE_NAME }}" -version
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 
       - name: Compute SHA256 of the AppImage
         id: sha
@@ -146,23 +147,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: opensta-appimage
+          target_commitish: ${{ github.sha }}
           name: OpenSTA AppImage (Rolling)
           overwrite_files: true
           body: |
             ## OpenSTA - Linux x86_64 AppImage
-
             A standalone, portable AppImage of **OpenSTA** built from source at commit [`${{ env.commit_short }}`](https://github.com/parallaxsw/OpenSTA/commit/${{ env.commit_hash }}).
-
             ---
-
             ### Build Info
-
             - **Source Commit:** `${{ env.commit_hash }}`
-            - **Built:** ${{ github.event.repository.updated_at }}
+            - **Built:** ${{ steps.date.outputs.date }}
             - **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
             ---
-
             ### Quick start
 
             ```
@@ -185,19 +181,15 @@ jobs:
             ```
 
             ### Notes
-
             Built automatically by GitHub Actions from the latest source. This release is updated on every workflow run with the latest commit. Full build logs in the **Actions** tab.
-
             ---
-
             *OpenSTA is developed by Parallax Software, Inc. and contributors. This is an unofficial repackaging - upstream project: https://github.com/parallaxsw/OpenSTA*
           files: |
             ${{ env.APPIMAGE_NAME }}
             ${{ env.APPIMAGE_NAME }}.sha256
-          draft: false
-          prerelease: false
-          make_latest: false
-          fail_on_unmatched_files: true
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            draft: false
+            prerelease: false
+            make_latest: false
+            fail_on_unmatched_files: true
+            generate_release_notes: false
+            token: ${{ secrets.GITHUB_TOKEN }}
