@@ -97,11 +97,11 @@ jobs:
       - name: Create the AppImage
         run: |
           ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --executable AppDir/usr/bin/netgen \
-            --desktop-file AppDir/usr/share/applications/netgen.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/netgen.png \
-            --output appimage
+          --appdir AppDir \
+          --executable AppDir/usr/lib/netgen/tcl/netgenexec \
+          --desktop-file AppDir/usr/share/applications/netgen.desktop \
+          --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/netgen.png \
+          --output appimage
 
           if [ ! -f "${{ env.APPIMAGE_NAME }}" ]; then
             for f in *.AppImage; do
