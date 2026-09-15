@@ -82,23 +82,68 @@ jobs:
       # ---------------------------------------------------------------
       - name: Prepare test workspace
         run: |
+          set -uo pipefail        # note: NOT -e, so a missing file won't kill us
           mkdir -p "$TEST_DIR"
           cd "$TEST_DIR"
 
-          # --- 4a. Clone a minimal, self-checking SKY130 LVS example ---
-          # sgherbst/sky130-hello-world provides a minimal inverter
-          # with netlists and a regression script.
+          # --- 4a. Minimal SKY130 LVS example (has its own regress.sh) ---
           git clone --depth 1 https://github.com/sgherbst/sky130-hello-world.git
+          echo "--- sky130-hello-world contents ---"
           ls -la sky130-hello-world/
 
-          # --- 4b. Fetch additional LVS example netlists from the
-          #          VSD-IAT Physical Verification workshop ---
+          # --- 4b. VSD-IAT workshop netlists ---
           git clone --depth 1 https://github.com/glennfrey/Physical_Verification_using_Sky130.git
+          echo "--- Physical_Verification_using_Sky130 contents ---"
           ls -la Physical_Verification_using_Sky130/
 
-          # --- 4c. Fetch the SKY130 netgen setup file (tech file) ---
-          # This is required by netgen to understand SKY130 devices.
-          wget -q https://raw.githubusercontent.com/RTimothyEdwards/open_pdks/master/sky130/libs.tech/netgen/sky130A_setup.tcl
+          # --- 4c. Locate sky130A_setup.tcl ---
+          # Strategy: search the repos we just cloned first, then fall back
+          # to a list of known-good URLs (branch names changed over time).
+          SETUP_FILE="sky130A_setup.tcl"
+          FOUND=0
+
+          # 4c-i. Look inside the cloned repos
+          for candidate in \
+              $(find sky130-hello-world -name 'sky130A_setup.tcl' 2>/dev/null) \
+              $(find Physical_Verification_using_Sky130 -name 'sky130A_setup.tcl' 2>/dev/null) \
+              ; do
+            cp "$candidate" "$SETUP_FILE"
+            echo "✅ Using local copy from: $candidate"
+            FOUND=1
+            break
+          done
+
+          # 4c-ii. Fallback to known raw URLs (tries main, master, mirrors)
+          if [ "$FOUND" -eq 0 ]; then
+            for URL in \
+              "https://raw.githubusercontent.com/RTimothyEdwards/open_pdks/main/sky130/libs.tech/netgen/sky130A_setup.tcl" \
+              "https://raw.githubusercontent.com/RTimothyEdwards/open_pdks/master/sky130/libs.tech/netgen/sky130A_setup.tcl" \
+              "https://raw.githubusercontent.com/efabless/open_pdks/main/sky130/libs.tech/netgen/sky130A_setup.tcl" \
+              ; do
+              echo "Trying: $URL"
+              if wget -q -L --tries=2 --timeout=20 -O "$SETUP_FILE" "$URL"; then
+                # Sanity-check: real Tcl setup files contain "proc" or "set"
+                if grep -qE '^\s*(proc|set)\b' "$SETUP_FILE"; then
+                  echo "✅ Fetched sky130A_setup.tcl from: $URL"
+                  FOUND=1
+                  break
+                else
+                  echo "⚠️  Downloaded file doesn't look like a Tcl setup file"
+                fi
+              fi
+              rm -f "$SETUP_FILE"
+            done
+          fi
+
+          # 4c-iii. If we still don't have it, flag it and move on
+          if [ "$FOUND" -eq 0 ]; then
+            echo "⚠️  WARNING: sky130A_setup.tcl not found anywhere."
+            echo "    The SKY130 inverter LVS test will be skipped."
+            touch SKY130_SETUP_MISSING
+          fi
+
+          echo "--- test workspace ---"
+          ls -la
 
       # ---------------------------------------------------------------
       # 5. Make the AppImage executable and run basic sanity checks
