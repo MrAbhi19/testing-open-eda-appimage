@@ -83,6 +83,27 @@ jobs:
           cmake --install build --prefix AppDir/usr --strip
           ls -la AppDir/usr/bin/
 
+      - name: Bundle Tcl script library
+        run: |
+          set -euo pipefail
+          # Match the Tcl version linuxdeploy will bundle (from the build host)
+          TCL_VER=$(echo 'puts [info tclversion]' | tclsh)
+          echo "Build-host Tcl version: $TCL_VER"
+
+          # Ubuntu 22.04 layout; adjust if you change the runner
+          SRC_DIR="/usr/share/tcltk/tcl${TCL_VER}"
+          test -d "$SRC_DIR" || { echo "Tcl lib dir not found: $SRC_DIR"; exit 1; }
+
+          DEST_DIR="AppDir/usr/lib/tcl${TCL_VER}"
+          mkdir -p "$DEST_DIR"
+          cp -a "$SRC_DIR/." "$DEST_DIR/"
+
+          # Also grab the shared lib explicitly so the version matches init.tcl
+          find /usr/lib/x86_64-linux-gnu -maxdepth 1 \
+            -name "libtcl${TCL_VER}.so*" -exec cp -av {} AppDir/usr/lib/ \;
+
+          ls -la "$DEST_DIR" | head
+
       - name: Create .desktop file and 256x256 icon
         run: |
           mkdir -p AppDir/usr/share/applications
