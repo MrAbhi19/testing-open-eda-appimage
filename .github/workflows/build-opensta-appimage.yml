@@ -37,19 +37,25 @@ jobs:
       - name: Build and install CUDD
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v3.0.0 \
+
+          # Discover the latest 3.x release tag (tags are bare, e.g. "3.0.0", not "v3.0.0")
+          CUDD_TAG=$(git ls-remote --tags --refs https://github.com/cuddorg/cudd.git \
+                     | awk -F/ '{print $NF}' \
+                     | grep -E '^3\.[0-9]+\.[0-9]+$' \
+                     | sort -V \
+                     | tail -n1)
+          echo "Using CUDD tag: $CUDD_TAG"
+          test -n "$CUDD_TAG"
+
+          git clone --depth 1 --branch "$CUDD_TAG" \
             https://github.com/cuddorg/cudd.git cudd-src
           cd cudd-src
           autoreconf -i
-          ./configure --prefix=/usr/local \
-                      --enable-shared \
-                      --enable-static
+          ./configure --prefix=/usr/local --enable-shared --enable-static
           make -j"$(nproc)"
           sudo make install
           sudo ldconfig
-          # Sanity check: fail fast if anything is missing
           test -f /usr/local/include/cudd.h
-          ls -l /usr/local/lib/libcudd*
 
       - name: Clone OpenSTA source
         run: |
