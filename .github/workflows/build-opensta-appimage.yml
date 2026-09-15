@@ -28,14 +28,16 @@ jobs:
             libffi-dev libfl-dev libreadline-dev \
             tcl-dev zlib1g-dev \
             libeigen3-dev \
+            autoconf automake libtool \
             swig \
             wget curl file desktop-file-utils \
             python3-pil
 
       - name: Build and install CUDD
         run: |
-          git clone --depth 1 --branch 3.0.0 https://github.com/cuddorg/cudd.git
-          cd cudd
+          wget -q https://github.com/cuddorg/cudd/releases/download/v3.0.0/cudd-3.0.0.tar.gz
+          tar xf cudd-3.0.0.tar.gz
+          cd cudd-3.0.0
           ./configure --prefix=/usr/local
           make -j$(nproc)
           sudo make install
