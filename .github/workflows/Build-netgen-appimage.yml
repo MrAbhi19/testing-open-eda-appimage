@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Netgen Version Tag (e.g. 1.5.280)'
+        description: 'Netgen Version (e.g. 1.5.323)'
         required: true
-        default: '1.5.280'
+        default: '1.5.323'
         type: string
       make_latest:
         description: 'Mark this release as GitHub "Latest"?'
@@ -33,37 +33,37 @@ jobs:
     steps:
       - name: Checkout this repository
         uses: actions/checkout@v4
-        with:
-          path: 'open-eda-appimage'
-
-      - name: Checkout Netgen upstream source
-        uses: actions/checkout@v4
-        with:
-          repository: 'RTimothyEdwards/netgen'
-          ref: ${{ env.NETGEN_VERSION }}
-          path: 'netgen-src'
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential m4 tcl-dev tk-dev \
-            python3 wget curl file desktop-file-utils \
-            python3-pil xvfb
+            build-essential autoconf automake m4 libtool \
+            tcl-dev tk-dev libx11-dev libxext-dev libxpm-dev libxt-dev \
+            wget curl file desktop-file-utils python3-pil
 
-      - name: Configure and Build Netgen
-        working-directory: ./netgen-src
+      - name: Download and extract Netgen ${{ env.NETGEN_VERSION }}
         run: |
-          # Netgen uses standard Autotools
+          wget -q http://opencircuitdesign.com/netgen/archive/netgen-${{ env.NETGEN_VERSION }}.tgz
+          tar xzf netgen-${{ env.NETGEN_VERSION }}.tgz
+          cd netgen-${{ env.NETGEN_VERSION }}
+          test -f configure && echo "Source looks good"
+
+      - name: Configure Netgen (autotools)
+        run: |
+          cd netgen-${{ env.NETGEN_VERSION }}
           ./configure --prefix=/usr
+
+      - name: Build Netgen
+        run: |
+          cd netgen-${{ env.NETGEN_VERSION }}
           make -j$(nproc)
 
       - name: Install Netgen into AppDir
-        working-directory: ./netgen-src
         run: |
-          # Use DESTDIR to redirect the /usr installation into our AppDir
-          make DESTDIR=$GITHUB_WORKSPACE/AppDir install
-          ls -la $GITHUB_WORKSPACE/AppDir/usr/bin/
+          cd netgen-${{ env.NETGEN_VERSION }}
+          make install DESTDIR=../AppDir
+          ls -la ../AppDir/usr/bin/
 
       - name: Create .desktop file and 256x256 icon
         run: |
@@ -81,10 +81,9 @@ jobs:
           Comment=Netgen LVS Tool
           EOF
 
-          # Generates a distinct color for the Netgen placeholder icon
           python3 -c '
           from PIL import Image
-          img = Image.new("RGBA", (256, 256), (200, 70, 50, 255))
+          img = Image.new("RGBA", (256, 256), (30, 100, 200, 255))
           img.save("AppDir/usr/share/icons/hicolor/256x256/apps/netgen.png", "PNG")
           print("256x256 icon created successfully")
           '
@@ -97,11 +96,11 @@ jobs:
       - name: Create the AppImage
         run: |
           ./linuxdeploy-x86_64.AppImage \
-          --appdir AppDir \
-          --executable AppDir/usr/lib/netgen/tcl/netgenexec \
-          --desktop-file AppDir/usr/share/applications/netgen.desktop \
-          --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/netgen.png \
-          --output appimage
+            --appdir AppDir \
+            --executable AppDir/usr/bin/netgen \
+            --desktop-file AppDir/usr/share/applications/netgen.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/netgen.png \
+            --output appimage
 
           if [ ! -f "${{ env.APPIMAGE_NAME }}" ]; then
             for f in *.AppImage; do
@@ -117,9 +116,7 @@ jobs:
       - name: Smoke test the AppImage
         run: |
           chmod +x "${{ env.APPIMAGE_NAME }}"
-          # Netgen relies on Tk, which might complain if run headlessly in CI without an X server.
-          # xvfb-run fakes a display server for the test. -batch prevents it from dropping into an interactive shell.
-          xvfb-run ./${{ env.APPIMAGE_NAME }} -batch -help || echo "Test complete"
+          ./"${{ env.APPIMAGE_NAME }}" -v
 
       - name: Compute SHA256 of the AppImage
         id: sha
@@ -151,7 +148,7 @@ jobs:
           body: |
             ## Netgen ${{ env.NETGEN_VERSION }} - Linux x86_64 AppImage
 
-            A standalone, portable AppImage of **Netgen ${{ env.NETGEN_VERSION}}** built from the [official upstream repository](https://github.com/RTimothyEdwards/netgen/tree/${{ env.NETGEN_VERSION }}).
+            A standalone, portable AppImage of **Netgen ${{ env.NETGEN_VERSION }}** built from the [official upstream source tarball](http://opencircuitdesign.com/netgen/archive/netgen-${{ env.NETGEN_VERSION }}.tgz).
 
             ---
 
