@@ -90,14 +90,15 @@ jobs:
           print("256x256 icon created successfully")
           '
 
-          # Create a custom AppRun that sets NETGENDIR to the AppImage-internal path
-          cat > AppDir/AppRun << 'EOF'
+          # IMPORTANT: keep the custom AppRun OUTSIDE AppDir to avoid
+          # linuxdeploy trying to copy AppDir/AppRun onto itself.
+          cat > AppRun-custom << 'EOF'
           #!/bin/bash
           # Set NETGENDIR to the location of netgenexec inside the AppImage
           export NETGENDIR="$APPDIR/usr/lib/netgen"
           exec "$APPDIR/usr/bin/netgen" "$@"
           EOF
-          chmod +x AppDir/AppRun
+          chmod +x AppRun-custom
 
       - name: Download linuxdeploy
         run: |
@@ -111,7 +112,7 @@ jobs:
             --executable AppDir/usr/lib/netgen/tcl/netgenexec \
             --desktop-file AppDir/usr/share/applications/netgen.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/netgen.png \
-            --custom-apprun AppDir/AppRun \
+            --custom-apprun AppRun-custom \
             --output appimage
 
           if [ ! -f "${{ env.APPIMAGE_NAME }}" ]; then
