@@ -54,6 +54,18 @@ jobs:
       - name: Install deps
         run: npm install
 
+      - name: Debug 1 - is secret visible?
+        env:
+          CHECK: ${{ secrets.STARK }}
+        run: |
+          echo "len=${#CHECK}"
+
+      - name: Debug 2 - what does node see?
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.STARK }}
+        run: |
+          node -e "console.log('node sees key?', !!process.env.OPENROUTER_API_KEY, 'len:', (process.env.OPENROUTER_API_KEY||'').length)"
+
       - name: Run agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.STARK }}
