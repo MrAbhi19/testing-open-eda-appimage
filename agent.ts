@@ -10,9 +10,9 @@ const client = new OpenAI({
 const MODEL = process.env.MODEL || "nvidia/nemotron-nano-9b-v2:free";
 const PROMPT = process.env.PROMPT || "";
 const MAX_ITER = 20;
-const API_DELAY_MS = Number(process.env.API_DELAY_MS || 30000);
-const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 60000);
-const MAX_RETRIES = 3;
+const API_DELAY_MS = Number(process.env.API_DELAY_MS || 90000);
+const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 180000);
+const MAX_RETRIES = 5;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
