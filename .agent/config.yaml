@@ -1,0 +1,56 @@
+# gh-agent Configuration
+# All values can be overridden by environment variables
+
+# Model to use (OpenRouter model ID)
+model: "nvidia/nemotron-nano-9b-v2:free"
+
+# Maximum number of agent iterations
+maxIterations: 20
+
+# Delay between API calls (milliseconds) - adaptive rate limiting is preferred
+apiDelayMs: 5000
+
+# Delay between retries on rate limit / server errors (milliseconds)
+retryDelayMs: 30000
+
+# Maximum number of retries for failed API calls
+maxRetries: 5
+
+# Model context window size (tokens)
+maxTokens: 128000
+
+# Token budget for the conversation (prevents runaway costs)
+tokenBudget: 100000
+
+# Logging level: trace, debug, info, warn, error, fatal
+logLevel: "info"
+
+# Optional log file path (enables JSON logging)
+# logFile: ".agent/logs/agent.log"
+
+# Persist conversation history to disk
+persistConversation: true
+
+# Directory for conversation persistence
+conversationDir: ".agent/conversations"
+
+# Rate limiting configuration (token bucket algorithm)
+rateLimit:
+  requestsPerMinute: 10
+  tokensPerMinute: 50000
+
+# Tool execution timeout (milliseconds)
+toolTimeoutMs: 30000
+
+# Enable streaming responses (experimental)
+enableStreaming: false
+
+# Custom system prompt (optional)
+# systemPrompt: "You are an expert software engineer..."
+
+# Example environment variable overrides:
+# MODEL=anthropic/claude-3.5-sonnet
+# LOG_LEVEL=debug
+# API_DELAY_MS=2000
+# RATE_LIMIT_RPM=20
+# RATE_LIMIT_TPM=100000

@@ -1,62 +1,65 @@
 # syntax=docker/dockerfile:1.7
-# Unofficial Yosys container image
-# Copyright (c) 2026 Abhilash M — MIT License (see LICENSE)
+# gh-agent Docker Image
+# Multi-stage build for minimal production image
 
 # ---------- Build stage ----------
-FROM ubuntu:22.04 AS builder
+FROM node:22-alpine AS builder
 
-ARG YOSYS_VERSION=0.69
+WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive
+# Copy package files
+COPY package*.json ./
+COPY tsconfig.json ./
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake ninja-build wget ca-certificates \
-        gawk bison flex clang lld \
-        python3 libffi-dev libfl-dev libreadline-dev pkg-config \
-        tcl-dev zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install all dependencies (including devDependencies for build)
+RUN npm ci
 
-WORKDIR /src
-RUN wget -q https://github.com/YosysHQ/yosys/releases/download/v${YOSYS_VERSION}/yosys.tar.gz \
-    && tar xf yosys.tar.gz --strip-components=1 \
-    && rm yosys.tar.gz
+# Copy source code
+COPY src ./src
+COPY .agent/config.yaml ./.agent/config.yaml
 
-# Use Yosys's Makefile — the CMake install rules in 0.69 don't install
-# the standalone yosys binary, only the googletest subproject.
-RUN make config-gcc \
-    && make -j"$(nproc)" \
-    && make install PREFIX=/out/usr \
-    && echo "===== /out/usr/bin =====" \
-    && ls -la /out/usr/bin/ \
-    && echo "===== /out/usr/share =====" \
-    && ls -la /out/usr/share/ \
-    && echo "===== end install report ====="
+# Build (type-check only, no emit)
+RUN npm run build
 
-# ---------- Runtime stage ----------
-FROM ubuntu:22.04 AS runtime
+# ---------- Production stage ----------
+FROM node:22-alpine AS runtime
 
-ARG YOSYS_VERSION=0.69
+# Install dumb-init for proper signal handling
+RUN apk add --no-cache dumb-init
 
-LABEL org.opencontainers.image.title="Yosys (unofficial)"
-LABEL org.opencontainers.image.description="Standalone Yosys build from upstream source"
-LABEL org.opencontainers.image.source="https://github.com/MrAbhi19/open-eda-appimage"
-LABEL org.opencontainers.image.version="${YOSYS_VERSION}"
-LABEL org.opencontainers.image.licenses="ISC"
+# Create non-root user
+RUN addgroup -g 1000 -S agent && \
+    adduser -u 1000 -S agent -G agent
 
-ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app
 
-# Only runtime libs — no compilers, no dev headers.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libreadline8 libffi8 libtcl8.6 zlib1g \
-        graphviz xdot \
-    && rm -rf /var/lib/apt/lists/*
+# Copy package files
+COPY package*.json ./
 
-# Bring in the Yosys files built in the previous stage.
-COPY --from=builder /out/usr/ /usr/
+# Install production dependencies only
+RUN npm ci --omit=dev && \
+    npm cache clean --force
 
-# Yosys looks here for its techlibs / cells / scripts.
-ENV YOSYS_DATDIR=/usr/share/yosys
+# Copy built application and config
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/.agent/config.yaml ./.agent/config.yaml
 
-WORKDIR /work
-ENTRYPOINT ["yosys"]
-CMD ["-V"]
+# Create directories for conversation persistence and logs
+RUN mkdir -p .agent/conversations .agent/logs && \
+    chown -R agent:agent /app
+
+# Switch to non-root user
+USER agent
+
+# Expose port for health check (if needed)
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD node -e "console.log('healthy')" || exit 1
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+
+# Default command
+CMD ["node", "--import=tsx", "src/cli.ts"]

@@ -1,14 +1,37 @@
 {
   "name": "gh-agent",
+  "version": "2.0.0",
   "type": "module",
+  "description": "Autonomous coding agent with modular architecture, rate limiting, token tracking, and cost monitoring",
   "scripts": {
-    "agent": "tsx agent.ts"
+    "agent": "tsx src/agent.ts",
+    "agent:dev": "tsx watch src/agent.ts",
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src",
+    "docker:build": "docker build -t gh-agent .",
+    "docker:run": "docker run --rm -e OPENROUTER_API_KEY -e PROMPT gh-agent"
   },
   "dependencies": {
-    "openai": "^4.67.0"
+    "openai": "^4.67.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "zod": "^3.23.0",
+    "yaml": "^2.4.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
