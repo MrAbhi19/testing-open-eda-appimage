@@ -4,12 +4,17 @@ import path from "node:path";
 
 const client = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.STARK!,
+  apiKey: process.env.OPENROUTER_API_KEY!,
 });
 
-const MODEL = process.env.MODEL || "anthropic/claude-3.5-sonnet";
+const MODEL = process.env.MODEL || "nvidia/nemotron-nano-9b-v2:free";
 const PROMPT = process.env.PROMPT || "";
 const MAX_ITER = 20;
+const API_DELAY_MS = Number(process.env.API_DELAY_MS || 30000);
+const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 60000);
+const MAX_RETRIES = 3;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- tools ----------
 const tools = [
@@ -92,10 +97,12 @@ async function runTool(name: string, args: any): Promise<string> {
     if (name === "list_files") {
       const dir = safe(args.dir || ".");
       const entries = await fs.readdir(dir, { withFileTypes: true });
-      return entries
-        .filter((e) => e.name !== "node_modules" && e.name !== ".git")
-        .map((e) => (e.isDirectory() ? e.name + "/" : e.name))
-        .join("\n");
+      return (
+        entries
+          .filter((e) => e.name !== "node_modules" && e.name !== ".git")
+          .map((e) => (e.isDirectory() ? e.name + "/" : e.name))
+          .join("\n") || "(empty)"
+      );
     }
     if (name === "read_file") {
       return await fs.readFile(safe(args.path), "utf8");
@@ -138,18 +145,60 @@ async function main() {
 
   for (let i = 0; i < MAX_ITER; i++) {
     console.log(`\n--- iteration ${i + 1} ---`);
+    console.log(`Sleeping ${API_DELAY_MS / 1000}s before API call...`);
+    await sleep(API_DELAY_MS);
 
-    const res = await client.chat.completions.create({
-      model: MODEL,
-      messages,
-      tools,
-      tool_choice: "auto",
-    });
+    let res: any = null;
+    let attempt = 0;
 
-    const res = await client.chat.completions.create({ ... });
-    console.log("RAW RESPONSE:", JSON.stringify(res, null, 2));
-    const msg = res.choices?.[0]?.message;
-    if (!msg) { console.error("No choices in response"); process.exit(1); }
+    while (attempt < MAX_RETRIES) {
+      attempt++;
+      try {
+        res = await client.chat.completions.create({
+          model: MODEL,
+          messages,
+          tools,
+          tool_choice: "auto",
+        });
+
+        if (!res?.choices?.length) {
+          console.error(
+            `No choices (attempt ${attempt}):`,
+            JSON.stringify(res).slice(0, 400)
+          );
+          if (attempt < MAX_RETRIES) {
+            console.log(`Retrying in ${RETRY_DELAY_MS / 1000}s...`);
+            await sleep(RETRY_DELAY_MS);
+            continue;
+          }
+          console.log("Giving up on this iteration.");
+          return;
+        }
+
+        break; // success
+      } catch (e: any) {
+        const status = e?.status;
+        console.error(`API error (attempt ${attempt}):`, status, e?.message);
+
+        if (
+          (status === 429 || status === 502 || status === 503) &&
+          attempt < MAX_RETRIES
+        ) {
+          console.log(
+            `Rate/availability error, retrying in ${RETRY_DELAY_MS / 1000}s...`
+          );
+          await sleep(RETRY_DELAY_MS);
+          continue;
+        }
+
+        throw e;
+      }
+    }
+
+    if (!res?.choices?.length) {
+      console.log("No usable response. Stopping.");
+      return;
+    }
 
     const msg = res.choices[0].message;
     messages.push(msg);
@@ -173,7 +222,7 @@ async function main() {
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: result.slice(0, 8000), // avoid blowing context
+        content: result.slice(0, 8000),
       });
     }
   }
