@@ -146,6 +146,11 @@ async function main() {
       tool_choice: "auto",
     });
 
+    const res = await client.chat.completions.create({ ... });
+    console.log("RAW RESPONSE:", JSON.stringify(res, null, 2));
+    const msg = res.choices?.[0]?.message;
+    if (!msg) { console.error("No choices in response"); process.exit(1); }
+
     const msg = res.choices[0].message;
     messages.push(msg);
 
