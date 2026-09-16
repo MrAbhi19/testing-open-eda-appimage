@@ -1,0 +1,68 @@
+name: Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "What should the agent do?"
+        required: true
+        type: string
+      branch:
+        description: "Working branch"
+        required: true
+        default: "agent/playground"
+        type: string
+      model:
+        description: "OpenRouter model"
+        required: true
+        default: "nvidia/nemotron-3-ultra:free"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout working branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # If branch doesn't exist yet, create it from main
+      - name: Ensure branch exists
+        run: |
+          if ! git ls-remote --exit-code --heads origin "${{ inputs.branch }}"; then
+            echo "Branch missing, creating from default"
+            git checkout -b "${{ inputs.branch }}"
+            git push -u origin "${{ inputs.branch }}"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci || npm install
+
+      - name: Run agent
+        env:
+          STARK: ${{ secrets.STARK }}
+          PROMPT: ${{ inputs.prompt }}
+          MODEL: ${{ inputs.model }}
+        run: npx tsx agent.ts
+
+      - name: Commit & push
+        run: |
+          git config user.name  "agent-bot"
+          git config user.email "agent-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "agent: ${{ inputs.prompt }}"
+            git push origin HEAD:${{ inputs.branch }}
+          fi
