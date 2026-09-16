@@ -1,7 +1,9 @@
 {
   "name": "gh-agent",
   "type": "module",
-  "scripts": { "agent": "tsx agent.ts" },
+  "scripts": {
+    "agent": "tsx agent.ts"
+  },
   "dependencies": {
     "openai": "^4.67.0"
   },
