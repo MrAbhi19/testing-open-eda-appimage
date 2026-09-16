@@ -24,7 +24,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,42 +38,41 @@ jobs:
           git config user.email "agent-bot@users.noreply.github.com"
           git fetch origin
           if git ls-remote --exit-code --heads origin "${{ inputs.branch }}"; then
-            echo "Branch exists, checking out"
             git checkout "${{ inputs.branch }}"
             git pull --ff-only origin "${{ inputs.branch }}" || true
           else
-            echo "Branch missing, creating from current HEAD"
             git checkout -b "${{ inputs.branch }}"
             git push -u origin "${{ inputs.branch }}"
           fi
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: "20"
 
       - name: Install deps
         run: npm install
 
-      - name: Debug 1 - is secret visible?
-        env:
-          CHECK: ${{ secrets.STARK }}
-        run: |
-          echo "len=${#CHECK}"
-
-      - name: Debug 2 - what does node see?
+      - name: Sanity check (secret visible?)
         env:
           OPENROUTER_API_KEY: ${{ secrets.STARK }}
         run: |
-          node -e "console.log('node sees key?', !!process.env.OPENROUTER_API_KEY, 'len:', (process.env.OPENROUTER_API_KEY||'').length)"
+          node -e "console.log('key len:', (process.env.OPENROUTER_API_KEY||'').length)"
+
+      - name: Typecheck (pre-flight)
+        run: npm run typecheck || echo "::warning::typecheck failed before agent run"
 
       - name: Run agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.STARK }}
           PROMPT: ${{ inputs.prompt }}
           MODEL: ${{ inputs.model }}
-          API_DELAY_MS: "30000"
+          API_DELAY_MS: "15000"
           RETRY_DELAY_MS: "60000"
-        run: npx tsx agent.ts
+          MAX_ITER: "25"
+        run: npx tsx src/cli.ts run
+
+      - name: Typecheck (post-flight)
+        run: npm run typecheck || echo "::warning::typecheck failed after agent run"
 
       - name: Commit & push
         run: |
