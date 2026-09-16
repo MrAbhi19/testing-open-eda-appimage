@@ -10,12 +10,12 @@ on:
       branch:
         description: "Working branch"
         required: true
-        default: "agent/playground"
+        default: "stark"
         type: string
       model:
         description: "OpenRouter model"
         required: true
-        default: "nvidia/nemotron-3-ultra:free"
+        default: "nvidia/nemotron-3-ultra-550b-a55b:free"
         type: string
 
 permissions:
