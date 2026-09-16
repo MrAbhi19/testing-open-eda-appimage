@@ -56,7 +56,7 @@ jobs:
 
       - name: Run agent
         env:
-          OPENROUTER_API_KEY: ${{ secrets.stark }}
+          OPENROUTER_API_KEY: ${{ secrets.STARK }}
           PROMPT: ${{ inputs.prompt }}
           MODEL: ${{ inputs.model }}
           API_DELAY_MS: "30000"
