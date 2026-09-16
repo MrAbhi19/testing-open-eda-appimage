@@ -1,4 +1,6 @@
 import { z } from "zod";
+import fs from "node:fs/promises";
+import yaml from "yaml";
 
 export const ConfigSchema = z.object({
   model: z.string().default("nvidia/nemotron-nano-9b-v2:free"),
@@ -12,10 +14,12 @@ export const ConfigSchema = z.object({
   logFile: z.string().optional(),
   persistConversation: z.boolean().default(true),
   conversationDir: z.string().default(".agent/conversations"),
-  rateLimit: z.object({
-    requestsPerMinute: z.number().int().positive().default(10),
-    tokensPerMinute: z.number().int().positive().default(50000),
-  }).default({}),
+  rateLimit: z
+    .object({
+      requestsPerMinute: z.number().int().positive().default(10),
+      tokensPerMinute: z.number().int().positive().default(50000),
+    })
+    .default({ requestsPerMinute: 10, tokensPerMinute: 50000 }),
   toolTimeoutMs: z.number().int().positive().default(30000),
   enableStreaming: z.boolean().default(false),
   systemPrompt: z.string().optional(),
@@ -23,55 +27,63 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
-export async function loadConfig(env: Record<string, string | undefined> = process.env): Promise<Config> {
-  const configFile = env.CONFIG_FILE || ".agent/config.yaml";
-  
-  let fileConfig: Partial<Config> = {};
-  try {
-    const fs = await import("node:fs/promises");
-    const yaml = await import("yaml");
-    const content = await fs.readFile(configFile, "utf8");
-    fileConfig = yaml.parse(content) || {};
-  } catch {
-    // Config file is optional
+export async function loadConfig(
+  env: Record<string, string | undefined> = process.env
+): Promise<Config> {
+  const candidates = [
+    env.CONFIG_FILE,
+    ".agent/config.yaml",
+    "config.yaml",
+  ].filter(Boolean) as string[];
+
+  let fileConfig: Record<string, unknown> = {};
+  for (const p of candidates) {
+    try {
+      const content = await fs.readFile(p, "utf8");
+      fileConfig = (yaml.parse(content) as Record<string, unknown>) || {};
+      break;
+    } catch {
+      // try next candidate
+    }
   }
 
-  const envConfig: Partial<Config> = {
-    model: env.MODEL,
-    maxIterations: env.MAX_ITER ? Number(env.MAX_ITER) : undefined,
-    apiDelayMs: env.API_DELAY_MS ? Number(env.API_DELAY_MS) : undefined,
-    retryDelayMs: env.RETRY_DELAY_MS ? Number(env.RETRY_DELAY_MS) : undefined,
-    maxRetries: env.MAX_RETRIES ? Number(env.MAX_RETRIES) : undefined,
-    maxTokens: env.MAX_TOKENS ? Number(env.MAX_TOKENS) : undefined,
-    tokenBudget: env.TOKEN_BUDGET ? Number(env.TOKEN_BUDGET) : undefined,
-    logLevel: env.LOG_LEVEL as Config["logLevel"],
-    logFile: env.LOG_FILE,
-    persistConversation: env.PERSIST_CONVERSATION ? env.PERSIST_CONVERSATION === "true" : undefined,
-    conversationDir: env.CONVERSATION_DIR,
-    toolTimeoutMs: env.TOOL_TIMEOUT_MS ? Number(env.TOOL_TIMEOUT_MS) : undefined,
-    enableStreaming: env.ENABLE_STREAMING ? env.ENABLE_STREAMING === "true" : undefined,
-    systemPrompt: env.SYSTEM_PROMPT,
+  const envConfig: Record<string, unknown> = {};
+  const set = (
+    key: string,
+    raw: string | undefined,
+    coerce: (v: string) => unknown = (v) => v
+  ) => {
+    if (raw !== undefined && raw !== "") envConfig[key] = coerce(raw);
+  };
+
+  set("model", env.MODEL);
+  set("maxIterations", env.MAX_ITER, Number);
+  set("apiDelayMs", env.API_DELAY_MS, Number);
+  set("retryDelayMs", env.RETRY_DELAY_MS, Number);
+  set("maxRetries", env.MAX_RETRIES, Number);
+  set("maxTokens", env.MAX_TOKENS, Number);
+  set("tokenBudget", env.TOKEN_BUDGET, Number);
+  set("logLevel", env.LOG_LEVEL);
+  set("logFile", env.LOG_FILE);
+  set("persistConversation", env.PERSIST_CONVERSATION, (v) => v === "true");
+  set("conversationDir", env.CONVERSATION_DIR);
+  set("toolTimeoutMs", env.TOOL_TIMEOUT_MS, Number);
+  set("enableStreaming", env.ENABLE_STREAMING, (v) => v === "true");
+  set("systemPrompt", env.SYSTEM_PROMPT);
+
+  const rl: Record<string, unknown> = {};
+  if (env.RATE_LIMIT_RPM) rl.requestsPerMinute = Number(env.RATE_LIMIT_RPM);
+  if (env.RATE_LIMIT_TPM) rl.tokensPerMinute = Number(env.RATE_LIMIT_TPM);
+  if (Object.keys(rl).length > 0) envConfig.rateLimit = rl;
+
+  const merged = {
+    ...fileConfig,
+    ...envConfig,
     rateLimit: {
-      requestsPerMinute: env.RATE_LIMIT_RPM ? Number(env.RATE_LIMIT_RPM) : undefined,
-      tokensPerMinute: env.RATE_LIMIT_TPM ? Number(env.RATE_LIMIT_TPM) : undefined,
+      ...((fileConfig.rateLimit as object) || {}),
+      ...((envConfig.rateLimit as object) || {}),
     },
   };
 
-  // Remove undefined values
-  Object.keys(envConfig).forEach(key => {
-    if (envConfig[key as keyof Config] === undefined) {
-      delete envConfig[key as keyof Config];
-    }
-  });
-  
-  if (envConfig.rateLimit) {
-    Object.keys(envConfig.rateLimit).forEach(key => {
-      if (envConfig.rateLimit?.[key as keyof typeof envConfig.rateLimit] === undefined) {
-        delete envConfig.rateLimit[key as keyof typeof envConfig.rateLimit];
-      }
-    });
-  }
-
-  const merged = { ...fileConfig, ...envConfig };
   return ConfigSchema.parse(merged);
 }
